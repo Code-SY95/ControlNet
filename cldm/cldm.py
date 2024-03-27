@@ -21,7 +21,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 
 class ControlledUnetModel(UNetModel):
     def forward(self, x, timesteps=None, context=None, control=None, only_mid_control=False, **kwargs):
-        hs = []
+        hs = [] # Sy : hs에 encoder block outputs이 담길 예정
         with torch.no_grad():
             t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
             emb = self.time_embed(t_emb)
@@ -32,13 +32,13 @@ class ControlledUnetModel(UNetModel):
             h = self.middle_block(h, emb, context)
 
         if control is not None:
-            h += control.pop()
+            h += control.pop() # Sy: Add the output of the original middle block and the output of the control mid block
 
         for i, module in enumerate(self.output_blocks):
             if only_mid_control or control is None:
                 h = torch.cat([h, hs.pop()], dim=1)
             else:
-                h = torch.cat([h, hs.pop() + control.pop()], dim=1)
+                h = torch.cat([h, hs.pop() + control.pop()], dim=1) # Sy: modification part : add skip connection
             h = module(h, emb, context)
 
         h = h.type(x.dtype)
@@ -316,8 +316,8 @@ class ControlLDM(LatentDiffusion):
 
     @torch.no_grad()
     def get_input(self, batch, k, bs=None, *args, **kwargs):
-        x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
-        control = batch[self.control_key]
+        x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs) # Sy: x.shape = [b, 4, 64, 64] (latent input), c.shape = [b, 77, 768] (condition)
+        control = batch[self.control_key] # Sy: self.control_key = 'hint'. batch = {'jpg': batched input image tensor [b, 512, 512, 3], 'txt': [propmt list], 'hint': tensor [b, 512, 512, 3]}
         if bs is not None:
             control = control[:bs]
         control = control.to(self.device)
@@ -326,17 +326,17 @@ class ControlLDM(LatentDiffusion):
         return x, dict(c_crossattn=[c], c_concat=[control])
 
     def apply_model(self, x_noisy, t, cond, *args, **kwargs):
-        assert isinstance(cond, dict)
-        diffusion_model = self.model.diffusion_model
+        assert isinstance(cond, dict) # Sy: cond = {'c_crossattn': [c] [b, 77, 768], 'c_concat': [tensor [b, 3, 512, 512]]}
+        diffusion_model = self.model.diffusion_model # Sy: ControlledUnetModel
 
-        cond_txt = torch.cat(cond['c_crossattn'], 1)
+        cond_txt = torch.cat(cond['c_crossattn'], 1) #Sy : cond_txt = [b, 77, 768]
 
         if cond['c_concat'] is None:
             eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=None, only_mid_control=self.only_mid_control)
         else:
-            control = self.control_model(x=x_noisy, hint=torch.cat(cond['c_concat'], 1), timesteps=t, context=cond_txt)
-            control = [c * scale for c, scale in zip(control, self.control_scales)]
-            eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=control, only_mid_control=self.only_mid_control)
+            control = self.control_model(x=x_noisy, hint=torch.cat(cond['c_concat'], 1), timesteps=t, context=cond_txt) # Sy: self = ControlLDM, self.control_model = ControlNet
+            control = [c * scale for c, scale in zip(control, self.control_scales)] # Sy: self.control_scales = 1.0으로 된 list, control = control list
+            eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=control, only_mid_control=self.only_mid_control) # Sy: ControlledUnet을 호출
 
         return eps
 
@@ -408,7 +408,7 @@ class ControlLDM(LatentDiffusion):
     @torch.no_grad()
     def sample_log(self, cond, batch_size, ddim, ddim_steps, **kwargs):
         ddim_sampler = DDIMSampler(self)
-        b, c, h, w = cond["c_concat"][0].shape
+        b, c, h, w = cond["c_concat"][0].shape # Sy: [b, 3, 512, 512]
         shape = (self.channels, h // 8, w // 8)
         samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size, shape, cond, verbose=False, **kwargs)
         return samples, intermediates
@@ -416,7 +416,7 @@ class ControlLDM(LatentDiffusion):
     def configure_optimizers(self):
         lr = self.learning_rate
         params = list(self.control_model.parameters())
-        if not self.sd_locked:
+        if not self.sd_locked: # Sy: controlnet lock 여부를 판단하는 부분
             params += list(self.model.diffusion_model.output_blocks.parameters())
             params += list(self.model.diffusion_model.out.parameters())
         opt = torch.optim.AdamW(params, lr=lr)

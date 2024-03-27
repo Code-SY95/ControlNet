@@ -147,6 +147,21 @@ class DDIMSampler(object):
 
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
+        # Sy
+        '''
+        while 𝑡 < 𝑇 do
+        𝑟𝑥 ← random(0, max_roll)
+        𝑟𝑦 ← random(0, max_roll)
+        𝑧 ← roll(𝑧, (𝑟𝑥, 𝑟𝑦 ) )
+        𝑧_𝑠ℎ𝑎𝑝𝑒 ← shape(𝑧)
+        𝑧 ← patch_noise(z, p)
+        𝑧 ← sample(𝑧, 𝑡)
+        𝑧 ← unpatch_noise(z, z_shape, p)
+        𝑧 ← roll(𝑧, (−𝑟𝑥, −𝑟𝑦 ) )
+        𝑡 ← 𝑡 + 1
+        end
+        '''
+
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
@@ -159,7 +174,14 @@ class DDIMSampler(object):
             if ucg_schedule is not None:
                 assert len(ucg_schedule) == len(time_range)
                 unconditional_guidance_scale = ucg_schedule[i]
-
+            # Sy
+            ''' noise rolling
+            𝑟𝑥 ← random(0, max_roll) 
+            𝑟𝑦 ← random(0, max_roll)
+            𝑧 ← roll(𝑧, (𝑟𝑥, 𝑟𝑦 ) ) =>  z = img
+            𝑧_𝑠ℎ𝑎𝑝𝑒 ← shape(𝑧)
+            𝑧 ← patch_noise(z, p)
+            '''
             outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
@@ -167,7 +189,13 @@ class DDIMSampler(object):
                                       unconditional_guidance_scale=unconditional_guidance_scale,
                                       unconditional_conditioning=unconditional_conditioning,
                                       dynamic_threshold=dynamic_threshold)
-            img, pred_x0 = outs
+            img, pred_x0 = outs # Sy: t- step의 img = noisy image, pred_x0 = original x0에 대한 prediction
+            # Sy
+            ''' noise unrolling
+            𝑧 ← unpatch_noise(z, z_shape, p)
+            𝑧 ← roll(𝑧, (−𝑟𝑥, −𝑟𝑦 ) )
+            '''
+            
             if callback: callback(i)
             if img_callback: img_callback(pred_x0, i)
 
@@ -214,7 +242,7 @@ class DDIMSampler(object):
         if self.model.parameterization == "v":
             e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
         else:
-            e_t = model_output
+            e_t = model_output # Sy: [b, 4, 64, 64]
 
         if score_corrector is not None:
             assert self.model.parameterization == "eps", 'not implemented'

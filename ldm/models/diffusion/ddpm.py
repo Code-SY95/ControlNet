@@ -36,7 +36,7 @@ __conditioning_keys__ = {'concat': 'c_concat',
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
     does not change anymore."""
-    return self
+    return self # sy: True
 
 
 def uniform_on_device(r1, r2, shape, device):
@@ -416,11 +416,25 @@ class DDPM(pl.LightningModule):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         return self.p_losses(x, t, *args, **kwargs)
 
+    # Sy
+    def noise_rolling(self, z):
+        rx = torch.randint(0, 64, (1,))
+        ry = torch.randint(0, 64, (1,))
+        rolled_z = torch.roll(z, (rx, ry))
+        rolled_info = [rolled_z, rx, ry]
+        return rolled_info
+    
+    def noise_unrolling(self, rolled_z, rx, ry):
+        unrolled_z = torch.roll(rolled_z, (-rx, -ry))
+        return unrolled_z
+
     def get_input(self, batch, k):
         x = batch[k]
         if len(x.shape) == 3:
             x = x[..., None]
         x = rearrange(x, 'b h w c -> b c h w')
+        # Sy
+        x = self.noise_rolling(x)[0]
         x = x.to(memory_format=torch.contiguous_format).float()
         return x
 
@@ -442,7 +456,7 @@ class DDPM(pl.LightningModule):
         loss, loss_dict = self.shared_step(batch)
 
         self.log_dict(loss_dict, prog_bar=True,
-                      logger=True, on_step=True, on_epoch=True)
+                      logger=True, on_step=True, on_epoch=True) # Sy: self = ControlLDM
 
         self.log("global_step", self.global_step,
                  prog_bar=True, logger=True, on_step=True, on_epoch=False)
@@ -885,7 +899,7 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        model_output = self.apply_model(x_noisy, t, cond)
+        model_output = self.apply_model(x_noisy, t, cond) # Sy: cldm.py의 apply_model의 return eps = [b, 4, 64, 64]
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
